@@ -1,4 +1,5 @@
-name: CI - Docker y GHCR
+
+name: CI - Docker, GHCR y Docker Hub
 
 on:
   push:
@@ -17,20 +18,25 @@ jobs:
       - name: Obtener codigo
         uses: actions/checkout@v4
 
-      - name: Definir nombre de imagen
+      - name: Definir nombres de imagen
         id: image
         shell: bash
         run: |
-          echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          echo "ghcr=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          echo "hub=${DOCKERHUB_USERNAME,,}/${GITHUB_REPOSITORY#*/}" >> "$GITHUB_OUTPUT"
+        env:
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
 
       - name: Construir imagen Docker
-        run: docker build -t dds-devops-demo:test .
+        run: |
+          docker build -t dds-devops-demo:test .
 
       - name: Verificar funcionamiento
         run: |
           docker run -d --name web-test \
             -p 127.0.0.1:8080:80 \
             dds-devops-demo:test
+
           for i in $(seq 1 15); do
             if curl -fsS http://127.0.0.1:8080/ | grep -q "Hola DevOps"; then
               echo "Prueba exitosa"
@@ -38,22 +44,52 @@ jobs:
             fi
             sleep 1
           done
+
           docker logs web-test
           exit 1
 
       - name: Autenticarse en GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Etiquetar imagen
+      - name: Autenticarse en Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Etiquetar imagen para ambos registries
+        shell: bash
         run: |
+          TAG="${GITHUB_SHA::7}"
+
           docker tag dds-devops-demo:test \
-            ${{ steps.image.outputs.name }}:${GITHUB_SHA::7}
+            "${{ steps.image.outputs.ghcr }}:$TAG"
+
+          docker tag dds-devops-demo:test \
+            "${{ steps.image.outputs.ghcr }}:latest"
+
+          docker tag dds-devops-demo:test \
+            "${{ steps.image.outputs.hub }}:$TAG"
+
+          docker tag dds-devops-demo:test \
+            "${{ steps.image.outputs.hub }}:latest"
 
       - name: Publicar imagen en GHCR
+        shell: bash
         run: |
-          docker push \
-            ${{ steps.image.outputs.name }}:${GITHUB_SHA::7}
+          TAG="${GITHUB_SHA::7}"
+
+          docker push "${{ steps.image.outputs.ghcr }}:$TAG"
+          docker push "${{ steps.image.outputs.ghcr }}:latest"
+
+      - name: Publicar imagen en Docker Hub
+        shell: bash
+        run: |
+          TAG="${GITHUB_SHA::7}"
+
+          docker push "${{ steps.image.outputs.hub }}:$TAG"
+          docker push "${{ steps.image.outputs.hub }}:latest"
